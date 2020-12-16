@@ -1,0 +1,9 @@
+*.pyc
+
+AAA.log
+
+dataset/
+
+*.txt
+
+*.pt
