@@ -32,10 +32,8 @@ from pytorch_i3d_attention_gaze import InceptionI3d
 
 from z_my_egtea_dataset_attention_gaze import Egtea as Dataset
 
-from pytorch_ranger import Ranger, RangerVA
-
 n_wkers = 2
-b_sz = 8
+b_sz = 12
 mx_steps = 64e3
 
 # try to set random seed
@@ -69,23 +67,16 @@ def run(init_lr=0.1, max_steps=64e3, mode='rgb', batch_size=b_sz, save_model='')
     # setup the model
     if mode == 'flow':
         i3d = InceptionI3d(106, in_channels=2)
-        i3d.load_state_dict(torch.load('models/flow_a.pt'), strict=False)
+        i3d.load_state_dict(torch.load('models/flow_o.pt'), strict=False)
     else:
-        i3d = InceptionI3d(106, in_channels=3, expanded=True)
-        i3d.load_state_dict(torch.load('models/rgb_a.pt'), strict=False)
-
-    i3d.copy_attention_weights()
-
-    # print(i3d.attention_inc.b1a.conv3d.weight)
-    # print(i3d.attention_inc_2.b1a.conv3d.weight)
-    # print(i3d.attention_inc_3.b1a.conv3d.weight)
+        i3d = InceptionI3d(106, in_channels=3)
+        i3d.load_state_dict(torch.load('models/rgb_o.pt'), strict=False)
 
     i3d.cuda()
     i3d = nn.DataParallel(i3d)
 
     lr = init_lr
-    #optimizer = optim.SGD(i3d.parameters(), lr=lr, momentum=0.9, weight_decay=0.0000001)
-    optimizer = RangerVA(i3d.parameters(), lr=0.01, weight_decay=0.0000001)
+    optimizer = optim.SGD(i3d.parameters(), lr=lr, momentum=0.9, weight_decay=0.0000001)
     lr_sched = optim.lr_scheduler.MultiStepLR(optimizer, [300, 1000])
 
 
@@ -93,6 +84,9 @@ def run(init_lr=0.1, max_steps=64e3, mode='rgb', batch_size=b_sz, save_model='')
     steps = 0
     # train it
     while steps < max_steps:#for epoch in range(num_epochs):
+        with open('output.txt', 'a') as f:
+            f.write('Step {}/{}\n'.format(steps, max_steps))
+            
         print('Step {}/{}'.format(steps, max_steps))
         print(optimizer.param_groups[0]['lr'])
         print('-' * 10)
@@ -170,15 +164,15 @@ def run(init_lr=0.1, max_steps=64e3, mode='rgb', batch_size=b_sz, save_model='')
                     optimizer.zero_grad()
                     lr_sched.step()
                     if steps % 10 == 0:
+                        with open('output.txt', 'a') as f:
+                            f.write('{} Tot Loss: {:.4f} Gaze Loss: {:.4f} \n'.format(phase, tot_loss/10, tot_gaze_loss/10))
                         print('{} Tot Loss: {:.4f} Gaze Loss: {:.4f} '.format(phase, tot_loss/10, tot_gaze_loss/10))
                         if steps % 1000 == 0:
                             # save model
                             torch.save(i3d.module.state_dict(), save_model+str(steps).zfill(6)+'.pt')
                         tot_loss = tot_gaze_loss = 0.
 
-    # print(i3d.module.attention_inc.b1a.conv3d.weight)
-    # print(i3d.module.attention_inc_2.b1a.conv3d.weight)
-    # print(i3d.module.attention_inc_3.b1a.conv3d.weight)
+
 
 if __name__ == '__main__':
     # need to add argparse
