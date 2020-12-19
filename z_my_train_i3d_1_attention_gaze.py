@@ -33,7 +33,7 @@ from pytorch_i3d_attention_gaze import InceptionI3d
 from z_my_egtea_dataset_attention_gaze import Egtea as Dataset
 
 n_wkers = 2
-b_sz = 12
+b_sz = 18
 mx_steps = 64e3
 
 # try to set random seed

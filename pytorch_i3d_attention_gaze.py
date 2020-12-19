@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
+from torch.cuda.amp import autocast
 
 import numpy as np
 
@@ -341,7 +342,8 @@ class InceptionI3d(nn.Module):
     def build(self):
         for k in self.end_points.keys():
             self.add_module(k, self.end_points[k])
-        
+
+    @autocast()        
     def forward(self, x):
         for end_point in self.VALID_ENDPOINTS:
             if end_point in self.end_points:

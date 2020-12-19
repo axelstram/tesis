@@ -30,10 +30,10 @@ g_clip_length = 16
 start_time = time.time()
 
 # setup the model
-i3d = InceptionI3d(400, in_channels=3)
+i3d = InceptionI3d(400, in_channels=3, expanded=True)
 i3d.replace_logits(g_num_classes)
-#i3d.load_state_dict(torch.load('tmp_RGB_a/tmp064000.pt'))
-i3d.load_state_dict(torch.load('models/rgb_a.pt'))
+i3d.load_state_dict(torch.load('./tmp/004000_extendido.pt'))
+#i3d.load_state_dict(torch.load('models/rgb_a.pt'))
 
 i3d.cuda()
 i3d = nn.DataParallel(i3d)
