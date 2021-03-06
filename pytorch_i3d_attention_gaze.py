@@ -10,6 +10,17 @@ import os
 import sys
 from collections import OrderedDict
 
+@torch.jit.script
+def mish(input):
+    '''
+    Applies the mish function element-wise:
+    mish(x) = x * tanh(softplus(x)) = x * tanh(ln(1 + exp(x)))
+    See additional documentation for mish class.
+    '''
+    return input.mul(F.softplus(input).tanh())
+
+def swish(x):
+    return x * F.sigmoid(x)
 
 class MaxPool3dSamePadding(nn.MaxPool3d):
     
@@ -53,7 +64,8 @@ class Unit3D(nn.Module):
                  kernel_shape=(1, 1, 1),
                  stride=(1, 1, 1),
                  padding=0,
-                 activation_fn=F.relu,
+                 #activation_fn=F.relu,
+		 activation_fn=mish, #nn.ReLU6(),
                  use_batch_norm=True,
                  use_bias=False,
                  name='unit_3d'):
