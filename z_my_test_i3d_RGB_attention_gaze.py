@@ -18,6 +18,7 @@ from pytorch_i3d_attention_gaze import InceptionI3d
 
 import time
 
+
 root = './dataset/EGTEA_Gaze_plus/z_frames_rgb'
 test_split = './dataset/EGTEA_Gaze_plus/action_annotation/test_split1.txt'
 
@@ -32,10 +33,9 @@ torch.set_num_interop_threads(1)
 torch.set_num_threads(1)
 
 # setup the model
-i3d = InceptionI3d(400, in_channels=3, expanded=True)
+i3d = InceptionI3d(400, in_channels=3)
 i3d.replace_logits(g_num_classes)
-i3d.load_state_dict(torch.load('./tmp/004650.pt'))
-#i3d.load_state_dict(torch.load('models/rgb_a.pt'))
+i3d.load_state_dict(torch.load('./tmp/000600.pt'))
 
 i3d.cuda()
 i3d = nn.DataParallel(i3d)
@@ -157,7 +157,7 @@ with torch.no_grad():
     print('Mean Class Accuracy')
     print(sum(class_correct/class_total) / g_num_classes)
 
-    with open('res_mish_4650.txt', 'w') as f:
+    with open('res_test.txt', 'w') as f:
          f.write('Accuracy {:.4f} \n'.format(1.0*cnt/num_instances))
          f.write('Mean Class Accuracy {:.4f} \n'.format(sum(class_correct/class_total) / g_num_classes))
 
