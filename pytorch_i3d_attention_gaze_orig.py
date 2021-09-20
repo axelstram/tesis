@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from torch.cuda.amp import autocast
 
 import numpy as np
 
@@ -10,92 +9,7 @@ import os
 import sys
 from collections import OrderedDict
 
-from halonet_pytorch import HaloAttention
 
-@torch.jit.script
-def mish(input):
-    '''
-    Applies the mish function element-wise:
-    mish(x) = x * tanh(softplus(x)) = x * tanh(ln(1 + exp(x)))
-    See additional documentation for mish class.
-    '''
-    return input.mul(F.softplus(input).tanh())
-
-def swish(x):
-    return x * F.sigmoid(x)
-
-class MHSA3D(nn.Module):
-    def __init__(self, n_dims, width=14, height=14, time=2, heads=4):
-        super(MHSA3D, self).__init__()
-        self.heads = heads
-
-        self.query = nn.Conv3d(n_dims, n_dims, kernel_size=1)
-        self.key = nn.Conv3d(n_dims, n_dims, kernel_size=1)
-        self.value = nn.Conv3d(n_dims, n_dims, kernel_size=1)
-
-        self.rel_h = nn.Parameter(torch.randn([1, heads, n_dims // heads, 1, 1, height]), requires_grad=True)
-        self.rel_w = nn.Parameter(torch.randn([1, heads, n_dims // heads, 1, width, 1]), requires_grad=True)
-        self.rel_t = nn.Parameter(torch.randn([1, heads, n_dims // heads, time, 1, 1]), requires_grad=True)
-
-        self.softmax = nn.Softmax(dim=-1)
-
-    def forward(self, x):
-        n_batch, C, t, width, height = x.size()
-        q = self.query(x).view(n_batch, self.heads, C // self.heads, -1)
-        k = self.key(x).view(n_batch, self.heads, C // self.heads, -1)
-        v = self.value(x).view(n_batch, self.heads, C // self.heads, -1)
-
-        content_content = torch.matmul(q.permute(0, 1, 3, 2), k)
-
-        content_position = (self.rel_h + self.rel_w + self.rel_t).view(1, self.heads, C // self.heads, -1).permute(0, 1, 3, 2)
-        content_position = torch.matmul(content_position, q)
-
-        energy = content_content + content_position
-        attention = self.softmax(energy)
-
-        out = torch.matmul(v, attention.permute(0, 1, 3, 2))
-        out = out.view(n_batch, C, t, width, height)
-
-        return out
-
-    
-class Bottleneck(nn.Module):
-    expansion = 4
-
-    def __init__(self, in_planes, planes, stride=1, heads=2, mhsa=True, resolution=None):
-        super(Bottleneck, self).__init__()
-
-        self.conv1 = nn.Conv3d(in_planes, planes, kernel_size=1, bias=False)
-        self.bn1 = nn.BatchNorm3d(planes)
-        if not mhsa:
-            self.conv2 = nn.Conv3d(planes, planes, kernel_size=3, padding=1, stride=stride, bias=False)
-        else:
-            self.conv2 = nn.ModuleList()
-            self.conv2.append(MHSA3D(planes, width=int(resolution[0]), height=int(resolution[1]), heads=heads))
-            if stride == 2:
-                self.conv2.append(nn.AvgPool3d(2, 2, 2))
-            self.conv2 = nn.Sequential(*self.conv2)
-        self.bn2 = nn.BatchNorm3d(planes)
-        self.conv3 = nn.Conv3d(planes, self.expansion * planes, kernel_size=1, bias=False)
-        self.bn3 = nn.BatchNorm3d(self.expansion * planes)
-
-        self.shortcut = nn.Sequential()
-        if stride != 1 or in_planes != self.expansion*planes:
-            self.shortcut = nn.Sequential(
-                nn.Conv3d(in_planes, self.expansion*planes, kernel_size=1, stride=stride),
-                nn.BatchNorm3d(self.expansion*planes)
-            )
-
-    def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = F.relu(self.bn2(self.conv2(out)))
-        out = self.bn3(self.conv3(out))
-        out += self.shortcut(x)
-        out = F.relu(out)
-        return out
-
-    
-    
 class MaxPool3dSamePadding(nn.MaxPool3d):
     
     def compute_pad(self, dim, s):
@@ -272,7 +186,7 @@ class InceptionI3d(nn.Module):
         'Predictions',
     )
 
-    def __init__(self, num_classes=400, spatial_squeeze=True, expanded=False,
+    def __init__(self, num_classes=400, spatial_squeeze=True,
                  final_endpoint='Logits', name='inception_i3d', in_channels=3, dropout_keep_prob=0.5):
         """Initializes I3D model instance.
         Args:
@@ -298,7 +212,6 @@ class InceptionI3d(nn.Module):
         self._num_classes = num_classes
         self._spatial_squeeze = spatial_squeeze
         self._final_endpoint = final_endpoint
-        self._expanded = expanded
         self.logits = None
 
         if self._final_endpoint not in self.VALID_ENDPOINTS:
@@ -376,35 +289,12 @@ class InceptionI3d(nn.Module):
         self.end_points[end_point] = InceptionModule(256+320+128+128, [384,192,384,48,128,128], name+end_point)
         if self._final_endpoint == end_point: return
 
-        if expanded:
-            end_point = 'Attention_Inc'
-            self.attention_inc = InceptionModule(384+384+128+128, [384,192,384,48,128,128], name+end_point)
-
-            end_point = 'Attention_Inc2'
-            self.attention_inc_2 = InceptionModule(384+384+128+128, [384,192,384,48,128,128], name+end_point)
-
-            end_point = 'Attention_Inc3'
-            self.attention_inc_3 = InceptionModule(384+384+128+128, [384,192,384,48,128,128], name+end_point)
-            self.attention_pred = Unit3D(in_channels=384+384+128+128, output_channels=1,
-                                kernel_shape=[1, 1, 1],
-                                padding=0,
-                                name='attention_pred')
-        else:
-            end_point = 'Attention_Inc'
-            self.attention_inc = InceptionModule(384+384+128+128, [384,192,384,48,128,128], name+end_point)
-            #self.attention_inc2 = MHSA3D(n_dims=384+384+128+128, width=7, height=7, heads = 2)
-            #self.attention_inc2 = InceptionModule(384+384+128+128, [384,192,384,48,128,128], name+end_point)
-            #self.attention_inc3 = InceptionModule(384+384+128+128, [384,192,384,48,128,128], name+end_point)
-            #self.attention_inc4 = MHSA3D(n_dims=384+384+128+128, width=7, height=7, heads = 2)
-            #self.attention_inc5 = MHSA3D(n_dims=384+384+128+128, width=7, height=7, heads = 2)
-            #self.attention_inc6 = MHSA3D(n_dims=384+384+128+128, width=7, height=7, heads = 2)
-            #self.attention_inc = BERT5(input_dim = 384+384+128+128, max_len = 100)
-            #self.attention_inc = Bottleneck(in_planes = 384+384+128+128, planes = 384+384+128+128, resolution=(7,7))
-            self.attention_pred = Unit3D(in_channels=384+384+128+128, output_channels=1,
-                                kernel_shape=[1, 1, 1],
-                                padding=0,
-                                name='attention_pred')
-
+        end_point = 'Attention_Inc'
+        self.attention_inc = InceptionModule(384+384+128+128, [384,192,384,48,128,128], name+end_point)
+        self.attention_pred = Unit3D(in_channels=384+384+128+128, output_channels=1,
+                             kernel_shape=[1, 1, 1],
+                             padding=0,
+                             name='attention_pred')
 
         end_point = 'Logits'
         self.avg_pool = nn.AvgPool3d(kernel_size=[2, 7, 7],
@@ -435,31 +325,15 @@ class InceptionI3d(nn.Module):
     def build(self):
         for k in self.end_points.keys():
             self.add_module(k, self.end_points[k])
-
-    @autocast()        
+        
     def forward(self, x):
         for end_point in self.VALID_ENDPOINTS:
             if end_point in self.end_points:
                 x = self._modules[end_point](x) # use _modules to work with dataparallel
 
-        if self._expanded:        
-            attention_map = self.attention_inc(x)
-            attention_map = self.attention_inc_2(attention_map)
-            attention_map = self.attention_inc_3(attention_map)
-            attention_map = self.attention_pred(attention_map)
-        else:
-            
-            attention_map = self.attention_inc(x)
-            #attention_map2 = self.attention_inc2(x)
-            
-#             attention_map = self.attention_inc3(self.attention_inc2(self.attention_inc(x)))
-#             attention_map2 = self.attention_inc6(self.attention_inc5(self.attention_inc4(x)))
-#             attention_map = torch.stack([attention_map, attention_map2]).mean(0)
-            attention_map = self.attention_pred(attention_map)
-            
-#             attention_map = torch.stack([self.attention_pred(attention_map[:,0:1024,:,:,:]), self.attention_pred(attention_map[:,1024:2048,:,:,:]), self.attention_pred(attention_map[:,2048:3072,:,:,:]), self.attention_pred(attention_map[:,3072:4096,:,:,:])]).mean(0) 
-       
-
+        attention_map = self.attention_inc(x)
+        #print x.shape, attention_map.shape #(12, 1024, 2, 7, 7) (12, 1024, 2, 7, 7)
+        attention_map = self.attention_pred(attention_map)
         a_map = torch.zeros_like(attention_map)
         #print attention_map.shape #(12, 1, 2, 7, 7)
 
@@ -488,8 +362,8 @@ class InceptionI3d(nn.Module):
         if self._spatial_squeeze:
             logits = x.squeeze(3).squeeze(3)
         # logits is batch X time X classes, which is what we want to work with
-        #return logits, a_map, feature
-        return logits, a_map # also return attention map
+        #return logits, a_map, feature #aslo return attention map
+        return logits, a_map # aslo return attention map
         
 
     def extract_features(self, x):
@@ -497,22 +371,4 @@ class InceptionI3d(nn.Module):
             if end_point in self.end_points:
                 x = self._modules[end_point](x)
         return self.avg_pool(x)
-
-
-    def copy_attention_weights(self):
-        with torch.no_grad():
-            self.attention_inc_2.b0.conv3d.weight.copy_(self.attention_inc.b0.conv3d.weight)
-            self.attention_inc_2.b1a.conv3d.weight.copy_(self.attention_inc.b1a.conv3d.weight)
-            self.attention_inc_2.b1b.conv3d.weight.copy_(self.attention_inc.b1b.conv3d.weight)
-            self.attention_inc_2.b2a.conv3d.weight.copy_(self.attention_inc.b2a.conv3d.weight)
-            self.attention_inc_2.b2b.conv3d.weight.copy_(self.attention_inc.b2b.conv3d.weight)
-            self.attention_inc_2.b3b.conv3d.weight.copy_(self.attention_inc.b3b.conv3d.weight)
-
-            self.attention_inc_3.b0.conv3d.weight.copy_(self.attention_inc.b0.conv3d.weight)
-            self.attention_inc_3.b1a.conv3d.weight.copy_(self.attention_inc.b1a.conv3d.weight)
-            self.attention_inc_3.b1b.conv3d.weight.copy_(self.attention_inc.b1b.conv3d.weight)
-            self.attention_inc_3.b2a.conv3d.weight.copy_(self.attention_inc.b2a.conv3d.weight)
-            self.attention_inc_3.b2b.conv3d.weight.copy_(self.attention_inc.b2b.conv3d.weight)
-            self.attention_inc_3.b3b.conv3d.weight.copy_(self.attention_inc.b3b.conv3d.weight)
-
 

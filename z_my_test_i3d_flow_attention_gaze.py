@@ -33,7 +33,7 @@ start_time = time.time()
 i3d = InceptionI3d(400, in_channels=2)
 i3d.replace_logits(g_num_classes)
 #i3d.load_state_dict(torch.load('tmp_flow_a/tmp064000.pt'))
-i3d.load_state_dict(torch.load('models/flow_a.pt'))
+i3d.load_state_dict(torch.load('tmp/000600.pt'))
 
 i3d.cuda()
 i3d = nn.DataParallel(i3d)
